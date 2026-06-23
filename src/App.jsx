@@ -4,7 +4,7 @@ import {
   Download, X, Pencil, CalendarDays, Feather, LogOut, LogIn, ShieldCheck, KeyRound,
   ArrowRightCircle, ArrowLeftCircle, Lock,
 } from "lucide-react";
-
+import toopLogo from "./toop.png";
 /* ================================================================== */
 /*  TOOP brand                                                        */
 /* ================================================================== */
@@ -16,7 +16,7 @@ const TOOP_RED_SOFT = "#FBEAE8";
 function ToopMark({ className = "h-12 w-12" }) {
   return (
     <img
-      src="/toop.png"
+src={toopLogo}
       alt="TOOP — The Order of Pen"
       className={`${className} object-contain select-none`}
       draggable="false"
