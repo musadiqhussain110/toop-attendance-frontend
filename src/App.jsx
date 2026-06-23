@@ -115,13 +115,33 @@ const store = {
         const r = await window.storage.get(key, shared);
         return r ? r.value : null;
       }
+      if (typeof window !== "undefined" && window.localStorage) {
+        return window.localStorage.getItem(key);
+      }
     } catch (_) {}
     return null;
   },
   async set(key, value, shared = true) {
     try {
-      if (typeof window !== "undefined" && window.storage) await window.storage.set(key, value, shared);
+      if (typeof window !== "undefined" && window.storage) {
+        await window.storage.set(key, value, shared);
+        return;
+      }
+      if (typeof window !== "undefined" && window.localStorage) {
+        window.localStorage.setItem(key, value);
+      }
     } catch (e) { console.error("Storage write failed:", e); }
+  },
+  async remove(key, shared = true) {
+    try {
+      if (typeof window !== "undefined" && window.storage) {
+        await window.storage.remove?.(key, shared);
+        return;
+      }
+      if (typeof window !== "undefined" && window.localStorage) {
+        window.localStorage.removeItem(key);
+      }
+    } catch (e) { console.error("Storage remove failed:", e); }
   },
 };
 const parse = (raw) => { try { return raw ? JSON.parse(raw) : null; } catch (_) { return null; } };
@@ -220,7 +240,7 @@ export default function TOOPAttendancePortal() {
   const [employees, setEmployees] = useState([]);
   const [attendance, setAttendance] = useState({}); // { dateKey: { uid: {status,inTime,outTime,note,source,markedAt} } }
   const [admin, setAdmin] = useState(null);          // { username, passHash }
-  const [session, setSession] = useState(null);      // { role, uid, name } — memory only
+  const [session, setSession] = useState(null);      // { role, uid, name } — persisted across reload
 
   useEffect(() => {
     let cancelled = false;
@@ -228,6 +248,7 @@ export default function TOOPAttendancePortal() {
       let emps = parse(await store.get("toop:employees"));
       const att = parse(await store.get("toop:attendance")) || {};
       let adm = parse(await store.get("toop:admin"));
+      const savedSession = parse(await store.get("toop:session"));
 
       if (!Array.isArray(emps)) {
         emps = [];
@@ -237,8 +258,14 @@ export default function TOOPAttendancePortal() {
         adm = { username: "admin", passHash: await hashPassword("admin123") };
         store.set("toop:admin", JSON.stringify(adm));
       }
+      const validSavedSession = savedSession?.role === "admin"
+        ? savedSession.uid === "admin"
+        : Array.isArray(emps) && emps.some((e) => e.uid === savedSession?.uid);
+
       if (cancelled) return;
-      setEmployees(emps); setAttendance(att); setAdmin(adm); setLoading(false);
+      setEmployees(emps); setAttendance(att); setAdmin(adm);
+      if (validSavedSession) setSession(savedSession);
+      setLoading(false);
     })();
     return () => { cancelled = true; };
   }, []);
@@ -363,7 +390,15 @@ export default function TOOPAttendancePortal() {
   }
 
   if (!session) {
-    return <LoginScreen onSubmit={async (u, p) => { const s = await attemptLogin(u, p); if (s) { setSession(s); return null; } return "Incorrect username or password."; }} />;
+    return <LoginScreen onSubmit={async (u, p) => {
+      const s = await attemptLogin(u, p);
+      if (s) {
+        setSession(s);
+        await store.set("toop:session", JSON.stringify(s));
+        return null;
+      }
+      return "Incorrect username or password.";
+    }} />;
   }
 
   const me = session.role === "employee" ? employees.find((e) => e.uid === session.uid) : null;
@@ -371,7 +406,7 @@ export default function TOOPAttendancePortal() {
   return (
     <div className="min-h-screen text-slate-900" style={{ backgroundColor: "#FAF7F6" }}>
       <BrandStyles />
-      <TopBar session={session} onLogout={() => setSession(null)} />
+      <TopBar session={session} onLogout={async () => { await store.remove("toop:session"); setSession(null); }} />
       <div className="mx-auto max-w-5xl px-4 py-6 sm:py-8">
         {session.role === "admin" ? (
           <AdminApp
