@@ -16,7 +16,7 @@ const TOOP_RED_SOFT = "#FBEAE8";
 function ToopMark({ className = "h-12 w-12" }) {
   return (
     <img
-src={toopLogo}
+      src={toopLogo}
       alt="TOOP — The Order of Pen"
       className={`${className} object-contain select-none`}
       draggable="false"
@@ -107,13 +107,6 @@ async function hashPassword(pw) {
   return "f" + (h >>> 0).toString(16);
 }
 
-const SEED = [
-  { uid: "seed-1", name: "Ayesha Khan",  empId: "E-001", dept: "Visa Processing",  username: "ayesha" },
-  { uid: "seed-2", name: "Bilal Ahmed",  empId: "E-002", dept: "Ticketing",        username: "bilal" },
-  { uid: "seed-3", name: "Sana Malik",   empId: "E-003", dept: "Umrah Packages",   username: "sana" },
-  { uid: "seed-4", name: "Hamza Sheikh", empId: "E-004", dept: "Sales",            username: "hamza" },
-  { uid: "seed-5", name: "Fatima Noor",  empId: "E-005", dept: "Customer Support", username: "fatima" },
-];
 
 const store = {
   async get(key, shared = true) {
@@ -236,9 +229,8 @@ export default function TOOPAttendancePortal() {
       const att = parse(await store.get("toop:attendance")) || {};
       let adm = parse(await store.get("toop:admin"));
 
-      if (!Array.isArray(emps) || emps.length === 0) {
+      if (!Array.isArray(emps)) {
         emps = [];
-        for (const s of SEED) emps.push({ ...s, passHash: await hashPassword("toop123") });
         store.set("toop:employees", JSON.stringify(emps));
       }
       if (!adm) {
@@ -329,7 +321,7 @@ export default function TOOPAttendancePortal() {
 
   /* roster + credential mutations */
   const addEmployee = useCallback(async (emp, password) => {
-    const passHash = await hashPassword(password && password.trim() ? password.trim() : "toop123");
+    const passHash = await hashPassword(password.trim());
     setEmployees((prev) => { const next = [...prev, { ...emp, uid: uid(), passHash }]; persistEmployees(next); return next; });
   }, [persistEmployees]);
 
@@ -392,7 +384,7 @@ export default function TOOPAttendancePortal() {
           <EmployeeApp me={me} attendance={attendance} selfCheckIn={selfCheckIn} updateField={updateField} />
         )}
         <footer className="mt-10 flex items-center justify-center gap-1.5 text-center text-xs text-slate-400">
-          <Lock className="h-3.5 w-3.5" /> Prototype access control — not server-grade security. Keep sensitive data out until this is on a backend.
+          <Lock className="h-3.5 w-3.5" /> Frontend demo storage only — connect this UI to the deployed backend for real MongoDB data.
         </footer>
       </div>
     </div>
@@ -438,7 +430,6 @@ function LoginScreen({ onSubmit }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [showDemo, setShowDemo] = useState(false);
 
   const submit = async () => {
     if (!username.trim() || !password) { setError("Enter your username and password."); return; }
@@ -472,7 +463,7 @@ function LoginScreen({ onSubmit }) {
         <div className="rounded-2xl bg-white p-6 ring-1 ring-slate-200 shadow-sm">
           <label className="mb-1 block text-xs font-medium text-slate-600">Username</label>
           <input value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()}
-            autoCapitalize="none" placeholder="e.g. ayesha or admin"
+            autoCapitalize="none" placeholder="Enter your username"
             className="mb-4 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:border-slate-400 focus:outline-none" />
 
           <label className="mb-1 block text-xs font-medium text-slate-600">Password</label>
@@ -490,19 +481,6 @@ function LoginScreen({ onSubmit }) {
             <LogIn className="h-4 w-4" /> {busy ? "Signing in…" : "Sign in"}
           </button>
 
-          <button onClick={() => setShowDemo((v) => !v)} className="mt-4 w-full text-center text-xs text-slate-400 hover:text-slate-600">
-            {showDemo ? "Hide demo accounts" : "Show demo accounts"}
-          </button>
-          {showDemo && (
-            <div className="mt-2 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
-              <div className="font-semibold text-slate-700">Admin</div>
-              <div>admin / admin123</div>
-              <div className="mt-2 font-semibold text-slate-700">Employees</div>
-              <div>ayesha · bilal · sana · hamza · fatima</div>
-              <div>password: toop123</div>
-              <div className="mt-2 text-slate-400">Change these before real use.</div>
-            </div>
-          )}
         </div>
       </div>
     </div>
@@ -855,7 +833,7 @@ function PeopleView({ employees, admin, addEmployee, editEmployee, removeEmploye
   const [adminPw, setAdminPw] = useState(""); const [adminMsg, setAdminMsg] = useState("");
 
   const submit = () => {
-    if (!name.trim()) return;
+    if (!name.trim() || !username.trim() || !password.trim()) return;
     addEmployee({ name: name.trim(), empId: empId.trim(), dept: dept.trim(), username: username.trim() }, password);
     setName(""); setEmpId(""); setDept(""); setUsername(""); setPassword("");
   };
@@ -891,10 +869,10 @@ function PeopleView({ employees, admin, addEmployee, editEmployee, removeEmploye
           <input value={empId} onChange={(e) => setEmpId(e.target.value)} placeholder="ID" className="sm:col-span-2 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none" />
           <input value={dept} onChange={(e) => setDept(e.target.value)} placeholder="Department" className="sm:col-span-3 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none" />
           <input value={username} onChange={(e) => setUsername(e.target.value)} autoCapitalize="none" placeholder="Username" className="sm:col-span-2 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none" />
-          <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" className="sm:col-span-1 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none" />
-          <button onClick={submit} disabled={!name.trim()} className="toop-btn sm:col-span-1 flex items-center justify-center rounded-lg px-3 py-2 shadow-sm"><Plus className="h-5 w-5" /></button>
+          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" className="sm:col-span-1 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none" />
+          <button onClick={submit} disabled={!name.trim() || !username.trim() || !password.trim()} className="toop-btn sm:col-span-1 flex items-center justify-center rounded-lg px-3 py-2 shadow-sm"><Plus className="h-5 w-5" /></button>
         </div>
-        <p className="mt-2 text-xs text-slate-400">Leave password blank to default to <span className="font-medium">toop123</span>. Username is what the employee signs in with.</p>
+        <p className="mt-2 text-xs text-slate-400">Username and password are required. Admin will create and share credentials with each employee manually.</p>
       </div>
 
       {employees.length === 0 ? (
