@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
-  Check, Clock, Users, BarChart3, Plus, Trash2, Search, ChevronLeft, ChevronRight,
-  Download, X, Pencil, CalendarDays, Feather, LogOut, LogIn, ShieldCheck, KeyRound,
+  Check, Users, BarChart3, Plus, Trash2, Search, ChevronLeft, ChevronRight,
+  Download, X, Pencil, CalendarDays, LogOut, LogIn, ShieldCheck, KeyRound,
   ArrowRightCircle, ArrowLeftCircle, Lock,
 } from "lucide-react";
 import toopLogo from "./toop.png";
+
 /* ================================================================== */
 /*  TOOP brand                                                        */
 /* ================================================================== */
@@ -23,19 +24,92 @@ function ToopMark({ className = "h-12 w-12" }) {
     />
   );
 }
-/* Brand chrome that Tailwind core classes can't express (exact red + hover). */
+
 function BrandStyles() {
   return (
     <style>{`
       .toop-btn{background:${TOOP_RED};color:#fff;transition:background .15s}
       .toop-btn:hover{background:${TOOP_RED_DARK}}
-      .toop-btn:disabled{opacity:.45}
+      .toop-btn:disabled{opacity:.45;cursor:not-allowed}
       .toop-tab-active{background:${TOOP_RED};color:#fff}
       .toop-soft{background:${TOOP_RED_SOFT};color:${TOOP_RED_DARK}}
       .toop-text{color:${TOOP_RED}}
     `}</style>
   );
 }
+
+/* ================================================================== */
+/*  API layer — MongoDB/Backend is now the source of truth             */
+/* ================================================================== */
+
+const API_BASE = `${(import.meta.env.VITE_API_URL || "http://localhost:4000").replace(/\/$/, "")}/api`;
+const TOKEN_KEY = "toop_token";
+
+const getToken = () => {
+  try { return localStorage.getItem(TOKEN_KEY); } catch (_) { return null; }
+};
+
+const setToken = (token) => {
+  try {
+    if (token) localStorage.setItem(TOKEN_KEY, token);
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch (_) {}
+};
+
+async function request(path, { method = "GET", body, auth = true } = {}) {
+  const headers = { "Content-Type": "application/json" };
+  const token = getToken();
+  if (auth && token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch(`${API_BASE}${path}`, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+
+  const data = await res.json().catch(() => ({}));
+
+  if (!res.ok) {
+    if (res.status === 401) setToken(null);
+    throw new Error(data.error || `Request failed (${res.status})`);
+  }
+
+  return data;
+}
+
+const api = {
+  async login(username, password) {
+    const { token, user } = await request("/auth/login", {
+      method: "POST",
+      auth: false,
+      body: { username, password },
+    });
+    setToken(token);
+    return user;
+  },
+  logout() {
+    setToken(null);
+  },
+  me: () => request("/auth/me"),
+  changePassword: (currentPassword, newPassword) =>
+    request("/auth/change-password", { method: "POST", body: { currentPassword, newPassword } }),
+
+  listUsers: () => request("/users"),
+  createUser: (user) => request("/users", { method: "POST", body: user }),
+  updateUser: (id, patch) => request(`/users/${id}`, { method: "PUT", body: patch }),
+  resetUserPassword: (id, password) =>
+    request(`/users/${id}/reset-password`, { method: "POST", body: { password } }),
+  deleteUser: (id) => request(`/users/${id}`, { method: "DELETE" }),
+
+  myMonth: (month) => request(`/attendance/me?month=${encodeURIComponent(month)}`),
+  checkIn: () => request("/attendance/checkin", { method: "POST" }),
+  checkOut: () => request("/attendance/checkout", { method: "POST" }),
+  day: (date) => request(`/attendance/day?date=${encodeURIComponent(date)}`),
+  summary: (month) => request(`/attendance/summary?month=${encodeURIComponent(month)}`),
+  setEntry: (entry) => request("/attendance", { method: "PUT", body: entry }),
+  removeEntry: (userId, date) =>
+    request(`/attendance?userId=${encodeURIComponent(userId)}&date=${encodeURIComponent(date)}`, { method: "DELETE" }),
+};
 
 /* ================================================================== */
 /*  Constants & helpers                                               */
@@ -56,30 +130,10 @@ const MONTHS_SHORT = MONTHS.map((m) => m.slice(0, 3));
 
 const pad = (n) => String(n).padStart(2, "0");
 const toDateKey = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const toMonthKey = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
 const formatLong = (d) => `${WEEKDAYS[d.getDay()]}, ${d.getDate()} ${MONTHS_SHORT[d.getMonth()]} ${d.getFullYear()}`;
 const nowHHMM = () => { const d = new Date(); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 const sameDay = (a, b) => toDateKey(a) === toDateKey(b);
-const uid = () => (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : "u" + Date.now() + Math.random().toString(36).slice(2, 8);
-
-// Prototype policy only. In production this must come from the backend .env, not the browser.
-const LATE_AFTER = "09:15";
-const hhmmToMinutes = (t) => {
-  if (!/^\d{2}:\d{2}$/.test(String(t || ""))) return null;
-  const [h, m] = String(t).split(":").map(Number);
-  return h * 60 + m;
-};
-const isLateCheckIn = (time) => {
-  const checkedAt = hhmmToMinutes(time);
-  const lateAfter = hhmmToMinutes(LATE_AFTER);
-  return checkedAt != null && lateAfter != null && checkedAt > lateAfter;
-};
-const sourceLabel = (record) => record?.source === "self" ? "Employee marked" : record?.source === "admin" ? "Admin marked" : "Marked";
-const fmtMarkedAt = (iso) => {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-};
 
 const AVATAR_COLORS = ["bg-blue-500", "bg-emerald-500", "bg-violet-500", "bg-amber-500", "bg-rose-500", "bg-cyan-500", "bg-indigo-500", "bg-teal-500"];
 const colorFor = (s) => AVATAR_COLORS[[...(s || "x")].reduce((a, c) => a + c.charCodeAt(0), 0) % AVATAR_COLORS.length];
@@ -94,57 +148,13 @@ const workedMinutes = (rec) => {
 };
 const fmtDuration = (m) => (m ? `${Math.floor(m / 60)}h ${pad(m % 60)}m` : "—");
 
-/* Not real security — a digest so passwords aren't stored as plain text in a prototype.
-   Real auth must hash + verify on a server (bcrypt) and never trust the client. */
-async function hashPassword(pw) {
-  try {
-    if (typeof crypto !== "undefined" && crypto.subtle) {
-      const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("toop::" + pw));
-      return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
-    }
-  } catch (_) {}
-  let h = 0; for (let i = 0; i < pw.length; i++) h = (h * 31 + pw.charCodeAt(i)) | 0;
-  return "f" + (h >>> 0).toString(16);
-}
-
-
-const store = {
-  async get(key, shared = true) {
-    try {
-      if (typeof window !== "undefined" && window.storage) {
-        const r = await window.storage.get(key, shared);
-        return r ? r.value : null;
-      }
-      if (typeof window !== "undefined" && window.localStorage) {
-        return window.localStorage.getItem(key);
-      }
-    } catch (_) {}
-    return null;
-  },
-  async set(key, value, shared = true) {
-    try {
-      if (typeof window !== "undefined" && window.storage) {
-        await window.storage.set(key, value, shared);
-        return;
-      }
-      if (typeof window !== "undefined" && window.localStorage) {
-        window.localStorage.setItem(key, value);
-      }
-    } catch (e) { console.error("Storage write failed:", e); }
-  },
-  async remove(key, shared = true) {
-    try {
-      if (typeof window !== "undefined" && window.storage) {
-        await window.storage.remove?.(key, shared);
-        return;
-      }
-      if (typeof window !== "undefined" && window.localStorage) {
-        window.localStorage.removeItem(key);
-      }
-    } catch (e) { console.error("Storage remove failed:", e); }
-  },
+const sourceLabel = (record) => record?.source === "self" ? "Employee marked" : record?.source === "admin" ? "Admin marked" : "Marked";
+const fmtMarkedAt = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
-const parse = (raw) => { try { return raw ? JSON.parse(raw) : null; } catch (_) { return null; } };
 
 const downloadCSV = (filename, rows) => {
   const csv = rows.map((r) => r.map((c) => {
@@ -182,14 +192,24 @@ function EmptyState({ title, body, icon: Icon = Users }) {
   );
 }
 
-function StatusPicker({ value, onChange }) {
+function ErrorBox({ message, onClose }) {
+  if (!message) return null;
+  return (
+    <div className="mb-4 flex items-start justify-between gap-3 rounded-xl bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700 ring-1 ring-rose-100">
+      <span>{message}</span>
+      {onClose && <button onClick={onClose} className="rounded-md p-1 hover:bg-rose-100"><X className="h-4 w-4" /></button>}
+    </div>
+  );
+}
+
+function StatusPicker({ value, onChange, disabled }) {
   return (
     <div className="flex flex-wrap gap-1.5">
       {STATUSES.map((opt) => {
         const active = value === opt.key;
         return (
-          <button key={opt.key} onClick={() => onChange(opt.key)}
-            className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors ${active ? `${opt.solid} text-white shadow-sm` : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
+          <button key={opt.key} onClick={() => onChange(opt.key)} disabled={disabled}
+            className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors disabled:opacity-60 ${active ? `${opt.solid} text-white shadow-sm` : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
             {opt.label}
           </button>
         );
@@ -198,35 +218,45 @@ function StatusPicker({ value, onChange }) {
   );
 }
 
-function TimedDetail({ record, onIn, onOut, onNote }) {
-  const s = STATUS_MAP[record.status];
+function TimedDetail({ record, onIn, onOut, onNote, busy }) {
+  const s = STATUS_MAP[record.status] || STATUS_MAP.present;
   const mins = workedMinutes(record);
+  const markedAt = fmtMarkedAt(record.updatedAt || record.createdAt || record.markedAt);
   return (
     <div className="mt-3 flex flex-col gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:flex-wrap sm:items-center">
       {s.timed && (
         <>
           <label className="flex items-center gap-1.5 text-xs text-slate-500">
             <ArrowRightCircle className="h-4 w-4 text-emerald-500" /> In
-            <input type="time" value={record.inTime || ""} onChange={(e) => onIn(e.target.value)}
+            <input type="time" value={record.inTime || ""} disabled={busy} onChange={(e) => onIn(e.target.value)}
               className="rounded-md border border-slate-200 px-2 py-1 text-sm text-slate-700 focus:border-slate-400 focus:outline-none" />
           </label>
           <label className="flex items-center gap-1.5 text-xs text-slate-500">
             <ArrowLeftCircle className="h-4 w-4 text-rose-500" /> Out
-            <input type="time" value={record.outTime || ""} onChange={(e) => onOut(e.target.value)}
+            <input type="time" value={record.outTime || ""} disabled={busy} onChange={(e) => onOut(e.target.value)}
               className="rounded-md border border-slate-200 px-2 py-1 text-sm text-slate-700 focus:border-slate-400 focus:outline-none" />
           </label>
           <span className="text-xs font-medium text-slate-500">{fmtDuration(mins)}</span>
         </>
       )}
-      <input type="text" value={record.note || ""} onChange={(e) => onNote(e.target.value)}
+      <input type="text" value={record.note || ""} disabled={busy} onChange={(e) => onNote(e.target.value)}
         placeholder={record.status === "absent" || record.status === "leave" ? "Reason (optional)" : "Note (optional)"}
         className="flex-1 rounded-md border border-slate-200 px-3 py-1.5 text-sm focus:border-slate-400 focus:outline-none" />
       <span className={`inline-flex items-center gap-1.5 self-start rounded-full px-2.5 py-1 text-xs font-medium ring-1 ${s.soft}`}>
         <span className={`h-2 w-2 rounded-full ${s.dot}`} /> {s.label}
       </span>
       <span className="self-start rounded-full bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-500 ring-1 ring-slate-200">
-        {sourceLabel(record)}{fmtMarkedAt(record.markedAt) ? ` · ${fmtMarkedAt(record.markedAt)}` : ""}
+        {sourceLabel(record)}{markedAt ? ` · ${markedAt}` : ""}
       </span>
+    </div>
+  );
+}
+
+function SummaryTile({ label, value, accent }) {
+  return (
+    <div className="rounded-xl bg-white p-4 ring-1 ring-slate-200 shadow-sm">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className={`mt-1 text-xl font-bold ${accent}`}>{value}</div>
     </div>
   );
 }
@@ -236,150 +266,46 @@ function TimedDetail({ record, onIn, onOut, onNote }) {
 /* ================================================================== */
 
 export default function TOOPAttendancePortal() {
-  const [loading, setLoading] = useState(true);
+  const [booting, setBooting] = useState(true);
+  const [session, setSession] = useState(null);
   const [employees, setEmployees] = useState([]);
-  const [attendance, setAttendance] = useState({}); // { dateKey: { uid: {status,inTime,outTime,note,source,markedAt} } }
-  const [admin, setAdmin] = useState(null);          // { username, passHash }
-  const [session, setSession] = useState(null);      // { role, uid, name } — persisted across reload
+  const [error, setError] = useState("");
+
+  const logout = useCallback(() => {
+    api.logout();
+    setSession(null);
+    setEmployees([]);
+  }, []);
+
+  const refreshEmployees = useCallback(async () => {
+    const { users } = await api.listUsers();
+    setEmployees((users || []).filter((u) => u.role === "employee"));
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      let emps = parse(await store.get("toop:employees"));
-      const att = parse(await store.get("toop:attendance")) || {};
-      let adm = parse(await store.get("toop:admin"));
-      const savedSession = parse(await store.get("toop:session"));
-
-      if (!Array.isArray(emps)) {
-        emps = [];
-        store.set("toop:employees", JSON.stringify(emps));
+      try {
+        if (getToken()) {
+          const { user } = await api.me();
+          if (!cancelled) {
+            setSession(user);
+            if (user.role === "admin") {
+              const { users } = await api.listUsers();
+              if (!cancelled) setEmployees((users || []).filter((u) => u.role === "employee"));
+            }
+          }
+        }
+      } catch (err) {
+        setToken(null);
+      } finally {
+        if (!cancelled) setBooting(false);
       }
-      if (!adm) {
-        adm = { username: "admin", passHash: await hashPassword("admin123") };
-        store.set("toop:admin", JSON.stringify(adm));
-      }
-      const validSavedSession = savedSession?.role === "admin"
-        ? savedSession.uid === "admin"
-        : Array.isArray(emps) && emps.some((e) => e.uid === savedSession?.uid);
-
-      if (cancelled) return;
-      setEmployees(emps); setAttendance(att); setAdmin(adm);
-      if (validSavedSession) setSession(savedSession);
-      setLoading(false);
     })();
     return () => { cancelled = true; };
   }, []);
 
-  const persistEmployees = useCallback((list) => store.set("toop:employees", JSON.stringify(list)), []);
-  const persistAttendance = useCallback((map) => store.set("toop:attendance", JSON.stringify(map)), []);
-
-  /* attendance mutations (explicit dateKey) */
-  const setStatus = useCallback((dateKey, u, status) => {
-    setAttendance((prev) => {
-      const day = { ...(prev[dateKey] || {}) };
-      const existing = day[u];
-      if (existing && existing.status === status) delete day[u];
-      else {
-        const s = STATUS_MAP[status];
-        day[u] = {
-          status,
-          inTime: s.timed ? (existing?.inTime || nowHHMM()) : "",
-          outTime: s.timed ? (existing?.outTime || "") : "",
-          note: existing?.note || "",
-          source: "admin",
-          markedAt: new Date().toISOString(),
-        };
-      }
-      const next = { ...prev, [dateKey]: day };
-      persistAttendance(next); return next;
-    });
-  }, [persistAttendance]);
-
-  const updateField = useCallback((dateKey, u, field, value) => {
-    setAttendance((prev) => {
-      const day = { ...(prev[dateKey] || {}) };
-      if (!day[u]) return prev;
-      day[u] = { ...day[u], [field]: value, updatedAt: new Date().toISOString() };
-      const next = { ...prev, [dateKey]: day };
-      persistAttendance(next); return next;
-    });
-  }, [persistAttendance]);
-
-  const selfCheckIn = useCallback((dateKey, u) => {
-    setAttendance((prev) => {
-      const day = { ...(prev[dateKey] || {}) };
-      if (!day[u]) {
-        const inTime = nowHHMM();
-        day[u] = {
-          status: isLateCheckIn(inTime) ? "late" : "present",
-          inTime,
-          outTime: "",
-          note: "",
-          source: "self",
-          markedAt: new Date().toISOString(),
-        };
-      }
-      const next = { ...prev, [dateKey]: day };
-      persistAttendance(next); return next;
-    });
-  }, [persistAttendance]);
-
-  const markAllPresent = useCallback((dateKey) => {
-    setAttendance((prev) => {
-      const day = { ...(prev[dateKey] || {}) };
-      employees.forEach((e) => {
-        if (!day[e.uid]) day[e.uid] = {
-          status: "present",
-          inTime: nowHHMM(),
-          outTime: "",
-          note: "",
-          source: "admin",
-          markedAt: new Date().toISOString(),
-        };
-      });
-      const next = { ...prev, [dateKey]: day };
-      persistAttendance(next); return next;
-    });
-  }, [employees, persistAttendance]);
-
-  const clearDay = useCallback((dateKey) => {
-    setAttendance((prev) => { const next = { ...prev }; delete next[dateKey]; persistAttendance(next); return next; });
-  }, [persistAttendance]);
-
-  /* roster + credential mutations */
-  const addEmployee = useCallback(async (emp, password) => {
-    const passHash = await hashPassword(password.trim());
-    setEmployees((prev) => { const next = [...prev, { ...emp, uid: uid(), passHash }]; persistEmployees(next); return next; });
-  }, [persistEmployees]);
-
-  const editEmployee = useCallback((u, patch) => {
-    setEmployees((prev) => { const next = prev.map((e) => (e.uid === u ? { ...e, ...patch } : e)); persistEmployees(next); return next; });
-  }, [persistEmployees]);
-
-  const setEmployeePassword = useCallback(async (u, pw) => {
-    const passHash = await hashPassword(pw);
-    setEmployees((prev) => { const next = prev.map((e) => (e.uid === u ? { ...e, passHash } : e)); persistEmployees(next); return next; });
-  }, [persistEmployees]);
-
-  const removeEmployee = useCallback((u) => {
-    setEmployees((prev) => { const next = prev.filter((e) => e.uid !== u); persistEmployees(next); return next; });
-  }, [persistEmployees]);
-
-  const changeAdminPassword = useCallback(async (pw) => {
-    const passHash = await hashPassword(pw);
-    setAdmin((prev) => { const next = { ...prev, passHash }; store.set("toop:admin", JSON.stringify(next)); return next; });
-  }, []);
-
-  const attemptLogin = useCallback(async (username, password) => {
-    const u = (username || "").trim().toLowerCase();
-    const h = await hashPassword(password || "");
-    if (admin && u === admin.username.toLowerCase() && h === admin.passHash) return { role: "admin", uid: "admin", name: "Administrator" };
-    const emp = employees.find((e) => (e.username || "").toLowerCase() === u && e.passHash === h);
-    if (emp) return { role: "employee", uid: emp.uid, name: emp.name };
-    return null;
-  }, [admin, employees]);
-
-  if (loading) {
+  if (booting) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
         <div className="flex items-center gap-3 text-slate-500">
@@ -390,36 +316,41 @@ export default function TOOPAttendancePortal() {
   }
 
   if (!session) {
-    return <LoginScreen onSubmit={async (u, p) => {
-      const s = await attemptLogin(u, p);
-      if (s) {
-        setSession(s);
-        await store.set("toop:session", JSON.stringify(s));
-        return null;
-      }
-      return "Incorrect username or password.";
-    }} />;
+    return (
+      <LoginScreen
+        onSubmit={async (u, p) => {
+          try {
+            setError("");
+            const user = await api.login(u, p);
+            setSession(user);
+            if (user.role === "admin") await refreshEmployees();
+            return null;
+          } catch (err) {
+            return err.message || "Login failed.";
+          }
+        }}
+      />
+    );
   }
-
-  const me = session.role === "employee" ? employees.find((e) => e.uid === session.uid) : null;
 
   return (
     <div className="min-h-screen text-slate-900" style={{ backgroundColor: "#FAF7F6" }}>
       <BrandStyles />
-      <TopBar session={session} onLogout={async () => { await store.remove("toop:session"); setSession(null); }} />
+      <TopBar session={session} onLogout={logout} />
       <div className="mx-auto max-w-5xl px-4 py-6 sm:py-8">
+        <ErrorBox message={error} onClose={() => setError("")} />
         {session.role === "admin" ? (
           <AdminApp
-            employees={employees} attendance={attendance}
-            admin={admin} changeAdminPassword={changeAdminPassword}
-            setStatus={setStatus} updateField={updateField} markAllPresent={markAllPresent} clearDay={clearDay}
-            addEmployee={addEmployee} editEmployee={editEmployee} removeEmployee={removeEmployee} setEmployeePassword={setEmployeePassword}
+            session={session}
+            employees={employees}
+            refreshEmployees={refreshEmployees}
+            onError={(msg) => setError(msg)}
           />
         ) : (
-          <EmployeeApp me={me} attendance={attendance} selfCheckIn={selfCheckIn} updateField={updateField} />
+          <EmployeeApp me={session} onError={(msg) => setError(msg)} />
         )}
         <footer className="mt-10 flex items-center justify-center gap-1.5 text-center text-xs text-slate-400">
-          <Lock className="h-3.5 w-3.5" /> Frontend demo storage only — connect this UI to the deployed backend for real MongoDB data.
+          <Lock className="h-3.5 w-3.5" /> Connected to TOOP backend and MongoDB Atlas.
         </footer>
       </div>
     </div>
@@ -435,7 +366,7 @@ function TopBar({ session, onLogout }) {
     <div className="border-b border-slate-200 bg-white">
       <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
         <div className="flex items-center gap-3">
-<div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-visible">
+          <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-visible">
             <ToopMark className="h-16 w-16 scale-[1.45]" />
           </div>
           <div>
@@ -479,22 +410,14 @@ function LoginScreen({ onSubmit }) {
       <BrandStyles />
       <div className="w-full max-w-sm">
         <div className="mb-6 flex flex-col items-center text-center">
-  <div className="mb-5 mt-10 flex h-32 w-32 items-center justify-center overflow-visible">
-    <ToopMark className="h-28 w-28 scale-[1.25]" />
-  </div>
+          <div className="mb-5 mt-10 flex h-32 w-32 items-center justify-center overflow-visible">
+            <ToopMark className="h-28 w-28 scale-[1.25]" />
+          </div>
+          <h1 className="text-lg font-bold tracking-tight">TOOP Attendance Portal</h1>
+          <p className="text-xs font-medium uppercase tracking-widest" style={{ color: TOOP_RED }}>Ars longa, vita brevis</p>
+          <p className="mt-1 text-sm text-slate-500">Sign in to view your attendance</p>
+        </div>
 
-  <h1 className="text-lg font-bold tracking-tight">
-    TOOP Attendance Portal
-  </h1>
-
-  <p className="text-xs font-medium uppercase tracking-widest" style={{ color: TOOP_RED }}>
-    Ars longa, vita brevis
-  </p>
-
-  <p className="mt-1 text-sm text-slate-500">
-    Sign in to view your attendance
-  </p>
-</div>
         <div className="rounded-2xl bg-white p-6 ring-1 ring-slate-200 shadow-sm">
           <label className="mb-1 block text-xs font-medium text-slate-600">Username</label>
           <input value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()}
@@ -515,7 +438,6 @@ function LoginScreen({ onSubmit }) {
             className="toop-btn mt-5 flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold shadow-sm">
             <LogIn className="h-4 w-4" /> {busy ? "Signing in…" : "Sign in"}
           </button>
-
         </div>
       </div>
     </div>
@@ -523,38 +445,78 @@ function LoginScreen({ onSubmit }) {
 }
 
 /* ================================================================== */
-/*  Employee app (self-service)                                       */
+/*  Employee app                                                      */
 /* ================================================================== */
 
-function EmployeeApp({ me, attendance, selfCheckIn, updateField }) {
+function EmployeeApp({ me, onError }) {
   const [cursor, setCursor] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
-  if (!me) return <EmptyState title="Account not found" body="Your employee record was removed. Contact your administrator." icon={Lock} />;
+  const [records, setRecords] = useState([]);
+  const [policy, setPolicy] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  const today = new Date();
-  const todayKey = toDateKey(today);
-  const todayRec = attendance[todayKey]?.[me.uid];
   const year = cursor.getFullYear(), month = cursor.getMonth();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const monthKey = toMonthKey(cursor);
+  const today = new Date();
+  const todayKey = toDateKey(today);
+  const todayRec = records.find((r) => r.date === todayKey);
+
+  const loadMonth = useCallback(async () => {
+    try {
+      setLoading(true);
+      const data = await api.myMonth(monthKey);
+      setRecords(data.records || []);
+      setPolicy(data.policy || null);
+    } catch (err) {
+      onError(err.message || "Could not load your attendance.");
+    } finally {
+      setLoading(false);
+    }
+  }, [monthKey, onError]);
+
+  useEffect(() => { loadMonth(); }, [loadMonth]);
 
   const history = useMemo(() => {
     const rows = [];
     let totalMins = 0; const tally = { present: 0, late: 0, halfday: 0, leave: 0, absent: 0 };
     for (let d = daysInMonth; d >= 1; d--) {
       const k = `${year}-${pad(month + 1)}-${pad(d)}`;
-      const r = attendance[k]?.[me.uid];
-      if (r) { rows.push({ date: new Date(year, month, d), ...r }); if (tally[r.status] !== undefined) tally[r.status]++; totalMins += workedMinutes(r); }
+      const r = records.find((x) => x.date === k);
+      if (r) {
+        rows.push({ date: new Date(year, month, d), ...r });
+        if (tally[r.status] !== undefined) tally[r.status]++;
+        totalMins += workedMinutes(r);
+      }
     }
     return { rows, totalMins, tally };
-  }, [attendance, me.uid, year, month, daysInMonth]);
+  }, [records, year, month, daysInMonth]);
 
   const shiftMonth = (n) => setCursor(new Date(year, month + n, 1));
 
+  const doCheckIn = async () => {
+    try {
+      setBusy(true);
+      await api.checkIn();
+      await loadMonth();
+    } catch (err) { onError(err.message || "Check-in failed."); }
+    finally { setBusy(false); }
+  };
+
+  const doCheckOut = async () => {
+    try {
+      setBusy(true);
+      await api.checkOut();
+      await loadMonth();
+    } catch (err) { onError(err.message || "Check-out failed."); }
+    finally { setBusy(false); }
+  };
+
   return (
     <div className="space-y-5">
-      {/* Today card */}
       <div className="rounded-2xl bg-white p-5 ring-1 ring-slate-200 shadow-sm">
         <div className="flex items-center gap-3">
-          <Avatar name={me.name} uid={me.uid} size="h-12 w-12" />
+          <Avatar name={me.name} uid={me._id} size="h-12 w-12" />
           <div>
             <div className="text-lg font-bold leading-tight">{me.name}</div>
             <div className="text-xs text-slate-500">{me.empId}{me.empId && me.dept ? " · " : ""}{me.dept}</div>
@@ -564,38 +526,33 @@ function EmployeeApp({ me, attendance, selfCheckIn, updateField }) {
           <div className="text-xs font-medium text-slate-500">{formatLong(today)}</div>
           {!todayRec ? (
             <div className="mt-3 flex items-center justify-between gap-3">
-              <span className="text-sm text-slate-600">You haven't checked in yet. Check-ins after {LATE_AFTER} are marked late automatically.</span>
-              <button onClick={() => selfCheckIn(todayKey, me.uid)} className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700">
+              <span className="text-sm text-slate-600">You haven't checked in yet. Late is decided by the backend{policy?.lateAfter ? ` after ${policy.lateAfter}` : ""}.</span>
+              <button onClick={doCheckIn} disabled={busy} className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60">
                 <ArrowRightCircle className="h-4 w-4" /> Check in
               </button>
             </div>
           ) : (
             <div className="mt-3 space-y-3">
               <div className="flex flex-wrap items-center gap-3">
-                <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1 ${STATUS_MAP[todayRec.status].soft}`}>
-                  <span className={`h-2 w-2 rounded-full ${STATUS_MAP[todayRec.status].dot}`} /> {STATUS_MAP[todayRec.status].label}
+                <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1 ${STATUS_MAP[todayRec.status]?.soft || STATUS_MAP.present.soft}`}>
+                  <span className={`h-2 w-2 rounded-full ${STATUS_MAP[todayRec.status]?.dot || STATUS_MAP.present.dot}`} /> {STATUS_MAP[todayRec.status]?.label || todayRec.status}
                 </span>
-                {STATUS_MAP[todayRec.status].timed && (
-                  <span className="text-sm text-slate-600">
-                    In {todayRec.inTime || "—"} · Out {todayRec.outTime || "—"} · {fmtDuration(workedMinutes(todayRec))}
-                  </span>
+                {STATUS_MAP[todayRec.status]?.timed && (
+                  <span className="text-sm text-slate-600">In {todayRec.inTime || "—"} · Out {todayRec.outTime || "—"} · {fmtDuration(workedMinutes(todayRec))}</span>
                 )}
-                <span className="text-xs font-medium text-slate-400">{sourceLabel(todayRec)}{fmtMarkedAt(todayRec.markedAt) ? ` at ${fmtMarkedAt(todayRec.markedAt)}` : ""}</span>
+                <span className="text-xs font-medium text-slate-400">{sourceLabel(todayRec)}{fmtMarkedAt(todayRec.createdAt) ? ` at ${fmtMarkedAt(todayRec.createdAt)}` : ""}</span>
               </div>
-              {STATUS_MAP[todayRec.status].timed && !todayRec.outTime && (
-                <button onClick={() => updateField(todayKey, me.uid, "outTime", nowHHMM())} className="flex items-center gap-1.5 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-700">
+              {STATUS_MAP[todayRec.status]?.timed && !todayRec.outTime && (
+                <button onClick={doCheckOut} disabled={busy} className="flex items-center gap-1.5 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-700 disabled:opacity-60">
                   <ArrowLeftCircle className="h-4 w-4" /> Check out
                 </button>
               )}
-              {STATUS_MAP[todayRec.status].timed && todayRec.outTime && (
-                <div className="text-sm font-medium text-emerald-600">Checked out for the day.</div>
-              )}
+              {STATUS_MAP[todayRec.status]?.timed && todayRec.outTime && <div className="text-sm font-medium text-emerald-600">Checked out for the day.</div>}
             </div>
           )}
         </div>
       </div>
 
-      {/* My month */}
       <div className="flex items-center justify-between rounded-2xl bg-white p-4 ring-1 ring-slate-200 shadow-sm">
         <button onClick={() => shiftMonth(-1)} className="rounded-lg p-2 text-slate-600 hover:bg-slate-100"><ChevronLeft className="h-5 w-5" /></button>
         <div className="text-base font-semibold">My record · {MONTHS[month]} {year}</div>
@@ -609,7 +566,7 @@ function EmployeeApp({ me, attendance, selfCheckIn, updateField }) {
         <SummaryTile label="Hours" value={fmtDuration(history.totalMins)} accent="text-slate-900" />
       </div>
 
-      {history.rows.length === 0 ? (
+      {loading ? <EmptyState title="Loading records" body="Please wait…" icon={CalendarDays} /> : history.rows.length === 0 ? (
         <EmptyState title="No records this month" body="Nothing has been logged for you yet." icon={CalendarDays} />
       ) : (
         <div className="overflow-hidden rounded-2xl bg-white ring-1 ring-slate-200 shadow-sm">
@@ -619,29 +576,18 @@ function EmployeeApp({ me, attendance, selfCheckIn, updateField }) {
               <th className="px-4 py-3 font-medium">In</th><th className="px-4 py-3 font-medium">Out</th>
               <th className="px-4 py-3 text-right font-medium">Hours</th>
             </tr></thead>
-            <tbody>
-              {history.rows.map((r, i) => (
-                <tr key={i} className="border-b border-slate-50 last:border-0">
-                  <td className="px-4 py-3 text-slate-700">{WEEKDAYS[r.date.getDay()]} {pad(r.date.getDate())}</td>
-                  <td className="px-4 py-3"><span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${STATUS_MAP[r.status].soft}`}><span className={`h-1.5 w-1.5 rounded-full ${STATUS_MAP[r.status].dot}`} />{STATUS_MAP[r.status].label}</span></td>
-                  <td className="px-4 py-3 text-slate-600">{r.inTime || "—"}</td>
-                  <td className="px-4 py-3 text-slate-600">{r.outTime || "—"}</td>
-                  <td className="px-4 py-3 text-right text-slate-700">{fmtDuration(workedMinutes(r))}</td>
-                </tr>
-              ))}
-            </tbody>
+            <tbody>{history.rows.map((r) => (
+              <tr key={r._id || r.date.toISOString()} className="border-b border-slate-50 last:border-0">
+                <td className="px-4 py-3 text-slate-700">{WEEKDAYS[r.date.getDay()]} {pad(r.date.getDate())}</td>
+                <td className="px-4 py-3"><span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${STATUS_MAP[r.status]?.soft || STATUS_MAP.present.soft}`}><span className={`h-1.5 w-1.5 rounded-full ${STATUS_MAP[r.status]?.dot || STATUS_MAP.present.dot}`} />{STATUS_MAP[r.status]?.label || r.status}</span></td>
+                <td className="px-4 py-3 text-slate-600">{r.inTime || "—"}</td>
+                <td className="px-4 py-3 text-slate-600">{r.outTime || "—"}</td>
+                <td className="px-4 py-3 text-right text-slate-700">{fmtDuration(workedMinutes(r))}</td>
+              </tr>
+            ))}</tbody>
           </table>
         </div>
       )}
-    </div>
-  );
-}
-
-function SummaryTile({ label, value, accent }) {
-  return (
-    <div className="rounded-xl bg-white p-4 ring-1 ring-slate-200 shadow-sm">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className={`mt-1 text-xl font-bold ${accent}`}>{value}</div>
     </div>
   );
 }
@@ -650,7 +596,7 @@ function SummaryTile({ label, value, accent }) {
 /*  Admin app                                                         */
 /* ================================================================== */
 
-function AdminApp(props) {
+function AdminApp({ session, employees, refreshEmployees, onError }) {
   const [tab, setTab] = useState("today");
   return (
     <div className="space-y-6">
@@ -666,19 +612,38 @@ function AdminApp(props) {
           </button>
         ))}
       </nav>
-      {tab === "today" && <AdminToday {...props} />}
-      {tab === "records" && <RecordsView employees={props.employees} attendance={props.attendance} />}
-      {tab === "people" && <PeopleView {...props} />}
+      {tab === "today" && <AdminToday employees={employees} onError={onError} />}
+      {tab === "records" && <RecordsView onError={onError} />}
+      {tab === "people" && <PeopleView session={session} employees={employees} refreshEmployees={refreshEmployees} onError={onError} />}
     </div>
   );
 }
 
-function AdminToday({ employees, attendance, setStatus, updateField, markAllPresent, clearDay }) {
+function AdminToday({ employees, onError }) {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [search, setSearch] = useState("");
+  const [records, setRecords] = useState([]);
+  const [busy, setBusy] = useState(false);
   const dateKey = toDateKey(selectedDate);
-  const dayRecords = attendance[dateKey] || {};
   const isToday = sameDay(selectedDate, new Date());
+
+  const recordMap = useMemo(() => {
+    const map = {};
+    for (const r of records) {
+      const id = typeof r.user === "object" ? r.user?._id : r.user;
+      if (id) map[id] = r;
+    }
+    return map;
+  }, [records]);
+
+  const loadDay = useCallback(async () => {
+    try {
+      const data = await api.day(dateKey);
+      setRecords(data.records || []);
+    } catch (err) { onError(err.message || "Could not load day records."); }
+  }, [dateKey, onError]);
+
+  useEffect(() => { loadDay(); }, [loadDay]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -688,17 +653,75 @@ function AdminToday({ employees, attendance, setStatus, updateField, markAllPres
 
   const counts = useMemo(() => {
     const c = { present: 0, late: 0, halfday: 0, leave: 0, absent: 0, unmarked: 0 };
-    employees.forEach((e) => { const r = dayRecords[e.uid]; if (r && c[r.status] !== undefined) c[r.status]++; else c.unmarked++; });
+    employees.forEach((e) => { const r = recordMap[e._id]; if (r && c[r.status] !== undefined) c[r.status]++; else c.unmarked++; });
     return c;
-  }, [employees, dayRecords]);
+  }, [employees, recordMap]);
 
   const shift = (n) => { const d = new Date(selectedDate); d.setDate(d.getDate() + n); setSelectedDate(d); };
+
+  const setStatus = async (employee, status) => {
+    try {
+      setBusy(true);
+      const existing = recordMap[employee._id];
+      if (existing && existing.status === status) {
+        await api.removeEntry(employee._id, dateKey);
+      } else {
+        const opt = STATUS_MAP[status];
+        await api.setEntry({
+          userId: employee._id,
+          date: dateKey,
+          status,
+          inTime: opt.timed ? (existing?.inTime || nowHHMM()) : "",
+          outTime: opt.timed ? (existing?.outTime || "") : "",
+          note: existing?.note || "",
+        });
+      }
+      await loadDay();
+    } catch (err) { onError(err.message || "Could not update attendance."); }
+    finally { setBusy(false); }
+  };
+
+  const updateField = async (employee, field, value) => {
+    const existing = recordMap[employee._id];
+    if (!existing) return;
+    try {
+      setBusy(true);
+      await api.setEntry({
+        userId: employee._id,
+        date: dateKey,
+        status: existing.status,
+        inTime: field === "inTime" ? value : (existing.inTime || ""),
+        outTime: field === "outTime" ? value : (existing.outTime || ""),
+        note: field === "note" ? value : (existing.note || ""),
+      });
+      await loadDay();
+    } catch (err) { onError(err.message || "Could not update record."); }
+    finally { setBusy(false); }
+  };
+
+  const markAllPresent = async () => {
+    try {
+      setBusy(true);
+      await Promise.all(employees.map((e) => recordMap[e._id] ? Promise.resolve() : api.setEntry({ userId: e._id, date: dateKey, status: "present", inTime: nowHHMM(), outTime: "", note: "" })));
+      await loadDay();
+    } catch (err) { onError(err.message || "Could not mark all present."); }
+    finally { setBusy(false); }
+  };
+
+  const clearDay = async () => {
+    try {
+      setBusy(true);
+      await Promise.all(records.map((r) => api.removeEntry(typeof r.user === "object" ? r.user._id : r.user, dateKey)));
+      await loadDay();
+    } catch (err) { onError(err.message || "Could not clear day."); }
+    finally { setBusy(false); }
+  };
 
   const exportDay = () => {
     const rows = [["Date", "Name", "ID", "Department", "Status", "In", "Out", "Hours", "Marked by", "Marked at", "Note"]];
     employees.forEach((e) => {
-      const r = dayRecords[e.uid];
-      rows.push([dateKey, e.name, e.empId || "", e.dept || "", r ? STATUS_MAP[r.status].label : "Unmarked", r?.inTime || "", r?.outTime || "", fmtDuration(workedMinutes(r)), r ? sourceLabel(r) : "", fmtMarkedAt(r?.markedAt), r?.note || ""]);
+      const r = recordMap[e._id];
+      rows.push([dateKey, e.name, e.empId || "", e.dept || "", r ? STATUS_MAP[r.status]?.label || r.status : "Unmarked", r?.inTime || "", r?.outTime || "", fmtDuration(workedMinutes(r)), r ? sourceLabel(r) : "", fmtMarkedAt(r?.updatedAt || r?.createdAt), r?.note || ""]);
     });
     downloadCSV(`toop-attendance-${dateKey}.csv`, rows);
   };
@@ -732,47 +755,32 @@ function AdminToday({ employees, attendance, setStatus, updateField, markAllPres
         </div>
       </div>
 
-      <div className="rounded-xl bg-white px-4 py-3 text-xs font-medium text-slate-500 ring-1 ring-slate-200 shadow-sm">
-        Employee dashboard only allows self check-in/check-out. Admin can correct status, mark half day, leave or absent. Late is auto-detected after <span className="font-semibold text-slate-700">{LATE_AFTER}</span>.
-      </div>
-
       <div className="flex flex-wrap items-center gap-2">
-        <button onClick={() => markAllPresent(dateKey)} className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-emerald-700"><Check className="h-4 w-4" /> Mark all present</button>
+        <button onClick={markAllPresent} disabled={busy} className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"><Check className="h-4 w-4" /> Mark all present</button>
         <button onClick={exportDay} className="flex items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"><Download className="h-4 w-4" /> Export day</button>
-        <button onClick={() => clearDay(dateKey)} className="flex items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-sm font-medium text-rose-600 ring-1 ring-slate-200 hover:bg-rose-50"><X className="h-4 w-4" /> Clear day</button>
+        <button onClick={clearDay} disabled={busy || records.length === 0} className="flex items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-sm font-medium text-rose-600 ring-1 ring-slate-200 hover:bg-rose-50 disabled:opacity-60"><X className="h-4 w-4" /> Clear day</button>
         <div className="relative ml-auto">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name, ID, team…" className="w-full rounded-lg border border-slate-200 py-2 pl-9 pr-3 text-sm focus:border-slate-400 focus:outline-none sm:w-64" />
         </div>
       </div>
 
-      {employees.length === 0 ? (
-        <EmptyState title="No employees yet" body="Add your team in the People tab to start taking attendance." />
-      ) : filtered.length === 0 ? (
-        <EmptyState title="No matches" body="No one matches your search." icon={Search} />
-      ) : (
-        <ul className="space-y-2">
-          {filtered.map((e) => {
-            const record = dayRecords[e.uid];
-            return (
-              <li key={e.uid} className="rounded-2xl bg-white p-4 ring-1 ring-slate-200 shadow-sm">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="flex items-center gap-3">
-                    <Avatar name={e.name} uid={e.uid} />
-                    <div><div className="font-semibold leading-tight">{e.name}</div><div className="text-xs text-slate-500">{e.empId}{e.empId && e.dept ? " · " : ""}{e.dept}</div></div>
-                  </div>
-                  <StatusPicker value={record?.status} onChange={(s) => setStatus(dateKey, e.uid, s)} />
+      {employees.length === 0 ? <EmptyState title="No employees yet" body="Add your team in the People tab to start taking attendance." /> : filtered.length === 0 ? <EmptyState title="No matches" body="No one matches your search." icon={Search} /> : (
+        <ul className="space-y-2">{filtered.map((e) => {
+          const record = recordMap[e._id];
+          return (
+            <li key={e._id} className="rounded-2xl bg-white p-4 ring-1 ring-slate-200 shadow-sm">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-3">
+                  <Avatar name={e.name} uid={e._id} />
+                  <div><div className="font-semibold leading-tight">{e.name}</div><div className="text-xs text-slate-500">{e.empId}{e.empId && e.dept ? " · " : ""}{e.dept}</div></div>
                 </div>
-                {record && (
-                  <TimedDetail record={record}
-                    onIn={(v) => updateField(dateKey, e.uid, "inTime", v)}
-                    onOut={(v) => updateField(dateKey, e.uid, "outTime", v)}
-                    onNote={(v) => updateField(dateKey, e.uid, "note", v)} />
-                )}
-              </li>
-            );
-          })}
-        </ul>
+                <StatusPicker value={record?.status} disabled={busy} onChange={(s) => setStatus(e, s)} />
+              </div>
+              {record && <TimedDetail record={record} busy={busy} onIn={(v) => updateField(e, "inTime", v)} onOut={(v) => updateField(e, "outTime", v)} onNote={(v) => updateField(e, "note", v)} />}
+            </li>
+          );
+        })}</ul>
       )}
     </div>
   );
@@ -780,28 +788,30 @@ function AdminToday({ employees, attendance, setStatus, updateField, markAllPres
 
 /* ---- Records ---- */
 
-function RecordsView({ employees, attendance }) {
+function RecordsView({ onError }) {
   const [cursor, setCursor] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
+  const [summary, setSummary] = useState([]);
+  const [loading, setLoading] = useState(false);
   const year = cursor.getFullYear(), month = cursor.getMonth();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const monthKey = toMonthKey(cursor);
 
-  const monthKeys = useMemo(() => Array.from({ length: daysInMonth }, (_, i) => `${year}-${pad(month + 1)}-${pad(i + 1)}`), [year, month, daysInMonth]);
+  const loadSummary = useCallback(async () => {
+    try {
+      setLoading(true);
+      const data = await api.summary(monthKey);
+      setSummary(data.summary || []);
+    } catch (err) { onError(err.message || "Could not load summary."); }
+    finally { setLoading(false); }
+  }, [monthKey, onError]);
 
-  const summary = useMemo(() => employees.map((e) => {
-    const row = { uid: e.uid, name: e.name, empId: e.empId, dept: e.dept, present: 0, late: 0, halfday: 0, leave: 0, absent: 0, mins: 0 };
-    monthKeys.forEach((k) => { const r = attendance[k]?.[e.uid]; if (r && row[r.status] !== undefined) { row[r.status]++; row.mins += workedMinutes(r); } });
-    const marked = row.present + row.late + row.halfday + row.leave + row.absent;
-    const here = row.present + row.late + row.halfday;
-    row.marked = marked; row.rate = marked ? Math.round((here / marked) * 100) : null;
-    return row;
-  }), [employees, monthKeys, attendance]);
+  useEffect(() => { loadSummary(); }, [loadSummary]);
 
-  const totalsMarked = summary.reduce((a, r) => a + r.marked, 0);
+  const totalsMarked = summary.reduce((a, r) => a + (r.marked || 0), 0);
   const shiftMonth = (n) => setCursor(new Date(year, month + n, 1));
 
   const exportMonth = () => {
     const rows = [["Name", "ID", "Department", "Present", "Late", "Half day", "Leave", "Absent", "Days marked", "Hours", "Attendance %"]];
-    summary.forEach((r) => rows.push([r.name, r.empId || "", r.dept || "", r.present, r.late, r.halfday, r.leave, r.absent, r.marked, fmtDuration(r.mins), r.rate == null ? "—" : r.rate + "%"]));
+    summary.forEach((r) => rows.push([r.user?.name || "", r.user?.empId || "", r.user?.dept || "", r.present, r.late, r.halfday, r.leave, r.absent, r.marked, fmtDuration(r.minutes || 0), r.rate == null ? "—" : r.rate + "%"]));
     downloadCSV(`toop-summary-${year}-${pad(month + 1)}.csv`, rows);
   };
 
@@ -816,11 +826,7 @@ function RecordsView({ employees, attendance }) {
         <button onClick={exportMonth} className="flex items-center gap-1.5 self-start rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"><Download className="h-4 w-4" /> Export summary</button>
       </div>
 
-      {employees.length === 0 ? (
-        <EmptyState title="Nothing to summarize" body="Add employees and take attendance to see monthly records." />
-      ) : totalsMarked === 0 ? (
-        <EmptyState title="No records this month" body={`No attendance has been marked in ${MONTHS[month]} ${year} yet.`} icon={CalendarDays} />
-      ) : (
+      {loading ? <EmptyState title="Loading summary" body="Please wait…" /> : summary.length === 0 ? <EmptyState title="Nothing to summarize" body="Add employees and take attendance to see monthly records." /> : totalsMarked === 0 ? <EmptyState title="No records this month" body={`No attendance has been marked in ${MONTHS[month]} ${year} yet.`} icon={CalendarDays} /> : (
         <div className="overflow-x-auto rounded-2xl bg-white ring-1 ring-slate-200 shadow-sm">
           <table className="w-full text-sm">
             <thead><tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wide text-slate-500">
@@ -829,27 +835,18 @@ function RecordsView({ employees, attendance }) {
               <th className="px-3 py-3 text-center font-medium">Hrs</th>
               <th className="px-4 py-3 text-right font-medium">Attendance</th>
             </tr></thead>
-            <tbody>
-              {summary.map((r) => (
-                <tr key={r.uid} className="border-b border-slate-50 last:border-0 hover:bg-slate-50">
-                  <td className="px-4 py-3"><div className="flex items-center gap-3"><Avatar name={r.name} uid={r.uid} size="h-8 w-8" /><div><div className="font-medium leading-tight">{r.name}</div><div className="text-xs text-slate-500">{r.dept}</div></div></div></td>
-                  <td className="px-3 py-3 text-center text-slate-700">{r.present}</td>
-                  <td className="px-3 py-3 text-center text-slate-700">{r.late}</td>
-                  <td className="px-3 py-3 text-center text-slate-700">{r.halfday}</td>
-                  <td className="px-3 py-3 text-center text-slate-700">{r.leave}</td>
-                  <td className="px-3 py-3 text-center text-slate-700">{r.absent}</td>
-                  <td className="px-3 py-3 text-center text-slate-600">{fmtDuration(r.mins)}</td>
-                  <td className="px-4 py-3 text-right">
-                    {r.rate == null ? <span className="text-slate-400">—</span> : (
-                      <div className="flex items-center justify-end gap-2">
-                        <div className="h-1.5 w-16 overflow-hidden rounded-full bg-slate-100"><div className={`h-full rounded-full ${r.rate >= 90 ? "bg-emerald-500" : r.rate >= 75 ? "bg-amber-500" : "bg-rose-500"}`} style={{ width: `${r.rate}%` }} /></div>
-                        <span className="w-9 text-right font-semibold text-slate-900">{r.rate}%</span>
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
+            <tbody>{summary.map((r) => (
+              <tr key={r.user?._id || r.user?.username} className="border-b border-slate-50 last:border-0 hover:bg-slate-50">
+                <td className="px-4 py-3"><div className="flex items-center gap-3"><Avatar name={r.user?.name} uid={r.user?._id} size="h-8 w-8" /><div><div className="font-medium leading-tight">{r.user?.name}</div><div className="text-xs text-slate-500">{r.user?.dept}</div></div></div></td>
+                <td className="px-3 py-3 text-center text-slate-700">{r.present}</td>
+                <td className="px-3 py-3 text-center text-slate-700">{r.late}</td>
+                <td className="px-3 py-3 text-center text-slate-700">{r.halfday}</td>
+                <td className="px-3 py-3 text-center text-slate-700">{r.leave}</td>
+                <td className="px-3 py-3 text-center text-slate-700">{r.absent}</td>
+                <td className="px-3 py-3 text-center text-slate-600">{fmtDuration(r.minutes || 0)}</td>
+                <td className="px-4 py-3 text-right">{r.rate == null ? <span className="text-slate-400">—</span> : <div className="flex items-center justify-end gap-2"><div className="h-1.5 w-16 overflow-hidden rounded-full bg-slate-100"><div className={`h-full rounded-full ${r.rate >= 90 ? "bg-emerald-500" : r.rate >= 75 ? "bg-amber-500" : "bg-rose-500"}`} style={{ width: `${r.rate}%` }} /></div><span className="w-9 text-right font-semibold text-slate-900">{r.rate}%</span></div>}</td>
+              </tr>
+            ))}</tbody>
           </table>
         </div>
       )}
@@ -860,43 +857,74 @@ function RecordsView({ employees, attendance }) {
 
 /* ---- People + credentials ---- */
 
-function PeopleView({ employees, admin, addEmployee, editEmployee, removeEmployee, setEmployeePassword, changeAdminPassword }) {
+function PeopleView({ session, employees, refreshEmployees, onError }) {
   const [name, setName] = useState(""); const [empId, setEmpId] = useState(""); const [dept, setDept] = useState("");
   const [username, setUsername] = useState(""); const [password, setPassword] = useState("");
   const [editing, setEditing] = useState(null); const [draft, setDraft] = useState({});
   const [confirmDel, setConfirmDel] = useState(null);
-  const [adminPw, setAdminPw] = useState(""); const [adminMsg, setAdminMsg] = useState("");
+  const [currentAdminPw, setCurrentAdminPw] = useState(""); const [adminPw, setAdminPw] = useState(""); const [adminMsg, setAdminMsg] = useState("");
+  const [busy, setBusy] = useState(false);
 
-  const submit = () => {
-    if (!name.trim() || !username.trim() || !password.trim()) return;
-    addEmployee({ name: name.trim(), empId: empId.trim(), dept: dept.trim(), username: username.trim() }, password);
-    setName(""); setEmpId(""); setDept(""); setUsername(""); setPassword("");
+  const submit = async () => {
+    if (!name.trim() || !username.trim() || !password.trim()) { onError("Name, username and password are required."); return; }
+    if (password.trim().length < 6) { onError("Password must be at least 6 characters."); return; }
+    try {
+      setBusy(true);
+      await api.createUser({ name: name.trim(), empId: empId.trim(), dept: dept.trim(), username: username.trim(), password: password.trim(), role: "employee" });
+      setName(""); setEmpId(""); setDept(""); setUsername(""); setPassword("");
+      await refreshEmployees();
+    } catch (err) { onError(err.message || "Could not add employee."); }
+    finally { setBusy(false); }
   };
 
-  const saveEdit = async (u) => {
-    if (!draft.name.trim()) return;
-    editEmployee(u, { name: draft.name.trim(), empId: draft.empId.trim(), dept: draft.dept.trim(), username: draft.username.trim() });
-    if (draft.password && draft.password.trim()) await setEmployeePassword(u, draft.password.trim());
-    setEditing(null);
+  const saveEdit = async (id) => {
+    if (!draft.name?.trim()) { onError("Name is required."); return; }
+    try {
+      setBusy(true);
+      await api.updateUser(id, { name: draft.name.trim(), empId: draft.empId.trim(), dept: draft.dept.trim(), username: draft.username.trim() });
+      if (draft.password && draft.password.trim()) await api.resetUserPassword(id, draft.password.trim());
+      setEditing(null);
+      await refreshEmployees();
+    } catch (err) { onError(err.message || "Could not update employee."); }
+    finally { setBusy(false); }
+  };
+
+  const removeEmployee = async (id) => {
+    try {
+      setBusy(true);
+      await api.deleteUser(id);
+      setConfirmDel(null);
+      await refreshEmployees();
+    } catch (err) { onError(err.message || "Could not remove employee."); }
+    finally { setBusy(false); }
+  };
+
+  const updateAdminPassword = async () => {
+    if (!currentAdminPw || !adminPw) { setAdminMsg("Enter current and new password."); return; }
+    if (adminPw.trim().length < 6) { setAdminMsg("Use at least 6 characters."); return; }
+    try {
+      setBusy(true);
+      await api.changePassword(currentAdminPw, adminPw.trim());
+      setCurrentAdminPw(""); setAdminPw(""); setAdminMsg("Admin password updated.");
+    } catch (err) { setAdminMsg(err.message || "Could not update admin password."); }
+    finally { setBusy(false); }
   };
 
   return (
     <div className="space-y-5">
-      {/* Admin account */}
       <div className="rounded-2xl bg-white p-4 ring-1 ring-slate-200 shadow-sm">
         <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-700"><ShieldCheck className="h-4 w-4 text-indigo-500" /> Admin account</h2>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <div className="text-sm text-slate-600">Username: <span className="font-medium text-slate-900">{admin?.username}</span></div>
-          <div className="flex flex-1 items-center gap-2">
-            <input type="password" value={adminPw} onChange={(e) => setAdminPw(e.target.value)} placeholder="New admin password" className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none" />
-            <button onClick={async () => { if (adminPw.trim().length < 4) { setAdminMsg("Use at least 4 characters."); return; } await changeAdminPassword(adminPw.trim()); setAdminPw(""); setAdminMsg("Admin password updated."); }}
-              className="toop-btn rounded-lg px-3 py-2 text-sm font-medium">Update</button>
+          <div className="text-sm text-slate-600">Username: <span className="font-medium text-slate-900">{session?.username}</span></div>
+          <div className="grid flex-1 grid-cols-1 gap-2 sm:grid-cols-3">
+            <input type="password" value={currentAdminPw} onChange={(e) => setCurrentAdminPw(e.target.value)} placeholder="Current password" className="rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none" />
+            <input type="password" value={adminPw} onChange={(e) => setAdminPw(e.target.value)} placeholder="New admin password" className="rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none" />
+            <button onClick={updateAdminPassword} disabled={busy} className="toop-btn rounded-lg px-3 py-2 text-sm font-medium">Update</button>
           </div>
         </div>
-        {adminMsg && <div className="mt-2 text-xs font-medium text-emerald-600">{adminMsg}</div>}
+        {adminMsg && <div className={`mt-2 text-xs font-medium ${adminMsg.includes("updated") ? "text-emerald-600" : "text-rose-600"}`}>{adminMsg}</div>}
       </div>
 
-      {/* Add employee */}
       <div className="rounded-2xl bg-white p-4 ring-1 ring-slate-200 shadow-sm">
         <h2 className="mb-3 text-sm font-semibold text-slate-700">Add an employee</h2>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-12">
@@ -905,59 +933,55 @@ function PeopleView({ employees, admin, addEmployee, editEmployee, removeEmploye
           <input value={dept} onChange={(e) => setDept(e.target.value)} placeholder="Department" className="sm:col-span-3 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none" />
           <input value={username} onChange={(e) => setUsername(e.target.value)} autoCapitalize="none" placeholder="Username" className="sm:col-span-2 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none" />
           <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" className="sm:col-span-1 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none" />
-          <button onClick={submit} disabled={!name.trim() || !username.trim() || !password.trim()} className="toop-btn sm:col-span-1 flex items-center justify-center rounded-lg px-3 py-2 shadow-sm"><Plus className="h-5 w-5" /></button>
+          <button onClick={submit} disabled={busy || !name.trim() || !username.trim() || !password.trim()} className="toop-btn sm:col-span-1 flex items-center justify-center rounded-lg px-3 py-2 shadow-sm"><Plus className="h-5 w-5" /></button>
         </div>
-        <p className="mt-2 text-xs text-slate-400">Username and password are required. Admin will create and share credentials with each employee manually.</p>
+        <p className="mt-2 text-xs text-slate-400">Username and password are required. Employee will be saved in MongoDB through the backend.</p>
       </div>
 
-      {employees.length === 0 ? (
-        <EmptyState title="No employees yet" body="Add your first team member above." />
-      ) : (
-        <ul className="space-y-2">
-          {employees.map((e) => {
-            const isEditing = editing === e.uid;
-            return (
-              <li key={e.uid} className="rounded-2xl bg-white p-4 ring-1 ring-slate-200 shadow-sm">
-                {isEditing ? (
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-12 sm:items-center">
-                    <input value={draft.name} onChange={(ev) => setDraft({ ...draft, name: ev.target.value })} className="sm:col-span-3 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none" placeholder="Full name" />
-                    <input value={draft.empId} onChange={(ev) => setDraft({ ...draft, empId: ev.target.value })} className="sm:col-span-2 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none" placeholder="ID" />
-                    <input value={draft.dept} onChange={(ev) => setDraft({ ...draft, dept: ev.target.value })} className="sm:col-span-2 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none" placeholder="Dept" />
-                    <input value={draft.username} onChange={(ev) => setDraft({ ...draft, username: ev.target.value })} autoCapitalize="none" className="sm:col-span-2 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none" placeholder="Username" />
-                    <input value={draft.password} onChange={(ev) => setDraft({ ...draft, password: ev.target.value })} className="sm:col-span-1 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none" placeholder="New pw" />
-                    <div className="sm:col-span-2 flex gap-2">
-                      <button onClick={() => saveEdit(e.uid)} className="flex-1 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700">Save</button>
-                      <button onClick={() => setEditing(null)} className="rounded-lg bg-slate-100 px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200">Cancel</button>
+      {employees.length === 0 ? <EmptyState title="No employees yet" body="Add your first team member above." /> : (
+        <ul className="space-y-2">{employees.map((e) => {
+          const isEditing = editing === e._id;
+          return (
+            <li key={e._id} className="rounded-2xl bg-white p-4 ring-1 ring-slate-200 shadow-sm">
+              {isEditing ? (
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-12 sm:items-center">
+                  <input value={draft.name} onChange={(ev) => setDraft({ ...draft, name: ev.target.value })} className="sm:col-span-3 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none" placeholder="Full name" />
+                  <input value={draft.empId} onChange={(ev) => setDraft({ ...draft, empId: ev.target.value })} className="sm:col-span-2 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none" placeholder="ID" />
+                  <input value={draft.dept} onChange={(ev) => setDraft({ ...draft, dept: ev.target.value })} className="sm:col-span-2 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none" placeholder="Dept" />
+                  <input value={draft.username} onChange={(ev) => setDraft({ ...draft, username: ev.target.value })} autoCapitalize="none" className="sm:col-span-2 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none" placeholder="Username" />
+                  <input type="password" value={draft.password} onChange={(ev) => setDraft({ ...draft, password: ev.target.value })} className="sm:col-span-1 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none" placeholder="New pw" />
+                  <div className="sm:col-span-2 flex gap-2">
+                    <button onClick={() => saveEdit(e._id)} disabled={busy} className="flex-1 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60">Save</button>
+                    <button onClick={() => setEditing(null)} className="rounded-lg bg-slate-100 px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200">Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <Avatar name={e.name} uid={e._id} />
+                    <div>
+                      <div className="font-semibold leading-tight">{e.name}</div>
+                      <div className="text-xs text-slate-500">{e.empId}{e.empId && e.dept ? " · " : ""}{e.dept}{e.username ? <span className="ml-1 text-slate-400">· @{e.username}</span> : null}</div>
                     </div>
                   </div>
-                ) : (
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <Avatar name={e.name} uid={e.uid} />
-                      <div>
-                        <div className="font-semibold leading-tight">{e.name}</div>
-                        <div className="text-xs text-slate-500">{e.empId}{e.empId && e.dept ? " · " : ""}{e.dept}{e.username ? <span className="ml-1 text-slate-400">· @{e.username}</span> : null}</div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <button onClick={() => { setEditing(e.uid); setDraft({ name: e.name, empId: e.empId || "", dept: e.dept || "", username: e.username || "", password: "" }); }} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-700"><Pencil className="h-4 w-4" /></button>
-                      <button onClick={() => setConfirmDel(e.uid)} className="rounded-lg p-2 text-slate-500 hover:bg-rose-50 hover:text-rose-600"><Trash2 className="h-4 w-4" /></button>
-                    </div>
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => { setEditing(e._id); setDraft({ name: e.name, empId: e.empId || "", dept: e.dept || "", username: e.username || "", password: "" }); }} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-700"><Pencil className="h-4 w-4" /></button>
+                    <button onClick={() => setConfirmDel(e._id)} className="rounded-lg p-2 text-slate-500 hover:bg-rose-50 hover:text-rose-600"><Trash2 className="h-4 w-4" /></button>
                   </div>
-                )}
-                {confirmDel === e.uid && (
-                  <div className="mt-3 flex flex-col gap-2 rounded-lg bg-rose-50 p-3 text-sm sm:flex-row sm:items-center sm:justify-between">
-                    <span className="text-rose-700">Remove {e.name} from the roster?</span>
-                    <div className="flex gap-2">
-                      <button onClick={() => { removeEmployee(e.uid); setConfirmDel(null); }} className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700">Remove</button>
-                      <button onClick={() => setConfirmDel(null)} className="rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50">Keep</button>
-                    </div>
+                </div>
+              )}
+              {confirmDel === e._id && (
+                <div className="mt-3 flex flex-col gap-2 rounded-lg bg-rose-50 p-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+                  <span className="text-rose-700">Remove {e.name} from the roster?</span>
+                  <div className="flex gap-2">
+                    <button onClick={() => removeEmployee(e._id)} disabled={busy} className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-60">Remove</button>
+                    <button onClick={() => setConfirmDel(null)} className="rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50">Keep</button>
                   </div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
+                </div>
+              )}
+            </li>
+          );
+        })}</ul>
       )}
     </div>
   );
