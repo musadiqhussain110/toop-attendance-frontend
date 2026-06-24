@@ -484,7 +484,7 @@ function EmployeeApp({ me, onError }) {
       const k = `${year}-${pad(month + 1)}-${pad(d)}`;
       const r = records.find((x) => x.date === k);
       if (r) {
-        rows.push({ date: new Date(year, month, d), ...r });
+        rows.push({ ...r, date: new Date(year, month, d) });
         if (tally[r.status] !== undefined) tally[r.status]++;
         totalMins += workedMinutes(r);
       }
