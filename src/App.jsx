@@ -222,29 +222,96 @@ function TimedDetail({ record, onIn, onOut, onNote, busy }) {
   const s = STATUS_MAP[record.status] || STATUS_MAP.present;
   const mins = workedMinutes(record);
   const markedAt = fmtMarkedAt(record.updatedAt || record.createdAt || record.markedAt);
+
+  // Keep note/reason typing local so the input does not lose focus or jump on mobile.
+  // It saves only on blur, Enter, or the Save button instead of saving on every keypress.
+  const [noteDraft, setNoteDraft] = useState(record.note || "");
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [noteSaved, setNoteSaved] = useState(false);
+
+  useEffect(() => {
+    setNoteDraft(record.note || "");
+    setNoteSaved(false);
+  }, [record._id, record.note]);
+
+  const hasNoteChanged = noteDraft.trim() !== String(record.note || "").trim();
+
+  const saveNote = async () => {
+    if (busy || noteSaving || !hasNoteChanged) return;
+
+    try {
+      setNoteSaving(true);
+      await onNote(noteDraft.trim());
+      setNoteSaved(true);
+      window.setTimeout(() => setNoteSaved(false), 1400);
+    } finally {
+      setNoteSaving(false);
+    }
+  };
+
   return (
     <div className="mt-3 flex flex-col gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:flex-wrap sm:items-center">
       {s.timed && (
         <>
           <label className="flex items-center gap-1.5 text-xs text-slate-500">
             <ArrowRightCircle className="h-4 w-4 text-emerald-500" /> In
-            <input type="time" value={record.inTime || ""} disabled={busy} onChange={(e) => onIn(e.target.value)}
-              className="rounded-md border border-slate-200 px-2 py-1 text-sm text-slate-700 focus:border-slate-400 focus:outline-none" />
+            <input
+              type="time"
+              value={record.inTime || ""}
+              disabled={busy}
+              onChange={(e) => onIn(e.target.value)}
+              className="rounded-md border border-slate-200 px-2 py-1 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
+            />
           </label>
+
           <label className="flex items-center gap-1.5 text-xs text-slate-500">
             <ArrowLeftCircle className="h-4 w-4 text-rose-500" /> Out
-            <input type="time" value={record.outTime || ""} disabled={busy} onChange={(e) => onOut(e.target.value)}
-              className="rounded-md border border-slate-200 px-2 py-1 text-sm text-slate-700 focus:border-slate-400 focus:outline-none" />
+            <input
+              type="time"
+              value={record.outTime || ""}
+              disabled={busy}
+              onChange={(e) => onOut(e.target.value)}
+              className="rounded-md border border-slate-200 px-2 py-1 text-sm text-slate-700 focus:border-slate-400 focus:outline-none"
+            />
           </label>
+
           <span className="text-xs font-medium text-slate-500">{fmtDuration(mins)}</span>
         </>
       )}
-      <input type="text" value={record.note || ""} disabled={busy} onChange={(e) => onNote(e.target.value)}
-        placeholder={record.status === "absent" || record.status === "leave" ? "Reason (optional)" : "Note (optional)"}
-        className="flex-1 rounded-md border border-slate-200 px-3 py-1.5 text-sm focus:border-slate-400 focus:outline-none" />
+
+      <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-start">
+        <textarea
+          value={noteDraft}
+          disabled={busy || noteSaving}
+          onChange={(e) => setNoteDraft(e.target.value)}
+          onBlur={saveNote}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              saveNote();
+              e.currentTarget.blur();
+            }
+          }}
+          rows={1}
+          placeholder={record.status === "absent" || record.status === "leave" ? "Reason (optional)" : "Note (optional)"}
+          className="min-h-[38px] flex-1 resize-none rounded-md border border-slate-200 px-3 py-2 text-sm leading-5 focus:border-slate-400 focus:outline-none disabled:bg-slate-50"
+        />
+
+        <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={saveNote}
+          disabled={busy || noteSaving || !hasNoteChanged}
+          className="self-start rounded-md bg-slate-900 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-slate-700 disabled:bg-slate-200 disabled:text-slate-400"
+        >
+          {noteSaving ? "Saving…" : noteSaved ? "Saved" : "Save"}
+        </button>
+      </div>
+
       <span className={`inline-flex items-center gap-1.5 self-start rounded-full px-2.5 py-1 text-xs font-medium ring-1 ${s.soft}`}>
         <span className={`h-2 w-2 rounded-full ${s.dot}`} /> {s.label}
       </span>
+
       <span className="self-start rounded-full bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-500 ring-1 ring-slate-200">
         {sourceLabel(record)}{markedAt ? ` · ${markedAt}` : ""}
       </span>
